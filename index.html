@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gravatar Checker</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --text: #1a1d21; --muted: #6b7280;
+    --border: #e2e5ea; --accent: #2563eb; --yes: #15803d; --no: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1115; --card: #171a20; --text: #e8eaee; --muted: #9aa1ad;
+      --border: #2a2f38; --accent: #60a5fa; --yes: #4ade80; --no: #f87171; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 20px; }
+  textarea { width: 100%; min-height: 150px; padding: 12px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--card); color: var(--text);
+    font: 15px/1.5 ui-monospace, Menlo, monospace; resize: vertical; }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .row { display: flex; justify-content: space-between; align-items: center;
+    gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+  .count { color: var(--muted); font-size: .9rem; }
+  .count.over { color: var(--no); font-weight: 600; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+    padding: 10px 20px; font-size: 1rem; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  ul { list-style: none; padding: 0; margin: 24px 0 0; display: grid; gap: 10px; }
+  li { display: flex; align-items: center; gap: 14px; background: var(--card);
+    border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+  li img, .ph { width: 56px; height: 56px; border-radius: 50%; flex: none;
+    background: var(--border); object-fit: cover; }
+  .info { min-width: 0; flex: 1; }
+  .email { overflow-wrap: anywhere; font-weight: 500; }
+  .status { font-size: .9rem; }
+  .status.yes { color: var(--yes); } .status.no { color: var(--no); }
+  .status.pending, .status.err { color: var(--muted); }
+  a { color: var(--accent); }
+  .note { color: var(--muted); font-size: .85rem; margin-top: 28px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Gravatar Checker</h1>
+  <p class="sub">Paste up to 10 email addresses (one per line, or separated by commas) to see which have a Gravatar.</p>
+
+  <textarea id="input" placeholder="jane@example.com&#10;john@example.org" aria-label="Email addresses"></textarea>
+  <div class="row">
+    <span class="count" id="count">0 / 10 emails</span>
+    <button id="go" disabled>Check</button>
+  </div>
+
+  <ul id="results" aria-live="polite"></ul>
+
+  <p class="note">Runs entirely in your browser. Emails are hashed (SHA-256) locally and only the hash is sent to Gravatar.</p>
+</main>
+
+<script>
+const MAX = 10;
+const input = document.getElementById('input');
+const count = document.getElementById('count');
+const go = document.getElementById('go');
+const results = document.getElementById('results');
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function parse() {
+  const seen = new Set();
+  return input.value.split(/[\s,;]+/)
+    .map(s => s.trim().toLowerCase()).filter(Boolean)
+    .filter(e => !seen.has(e) && seen.add(e));
+}
+
+function update() {
+  const n = parse().length;
+  count.textContent = `${n} / ${MAX} emails`;
+  count.classList.toggle('over', n > MAX);
+  go.disabled = n === 0 || n > MAX;
+}
+input.addEventListener('input', update);
+
+async function sha256(str) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// d=404 makes Gravatar return 404 when no avatar exists.
+function probe(hash) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => resolve({ found: true, url: img.src });
+    img.onerror = () => resolve({ found: false });
+    img.src = `https://gravatar.com/avatar/${hash}?s=112&d=404`;
+  });
+}
+
+function makeRow(email) {
+  const li = document.createElement('li');
+  const ph = document.createElement('div'); ph.className = 'ph';
+  const info = document.createElement('div'); info.className = 'info';
+  const em = document.createElement('div'); em.className = 'email'; em.textContent = email;
+  const st = document.createElement('div'); st.className = 'status pending'; st.textContent = 'Checking…';
+  info.append(em, st); li.append(ph, info);
+  return { li, ph, st };
+}
+
+go.addEventListener('click', async () => {
+  const emails = parse();
+  if (!emails.length || emails.length > MAX) return;
+  go.disabled = true;
+  results.replaceChildren();
+
+  await Promise.all(emails.map(async email => {
+    const row = makeRow(email);
+    results.append(row.li);
+    if (!EMAIL_RE.test(email)) {
+      row.st.className = 'status err'; row.st.textContent = 'Invalid email format';
+      return;
+    }
+    try {
+      const hash = await sha256(email);
+      const r = await probe(hash);
+      if (r.found) {
+        const img = document.createElement('img'); img.src = r.url; img.alt = '';
+        row.ph.replaceWith(img);
+        row.st.className = 'status yes';
+        row.st.innerHTML = '✓ Gravatar found · <a target="_blank" rel="noopener" href="https://gravatar.com/avatar/' + hash + '?s=512">view</a>';
+      } else {
+        row.st.className = 'status no'; row.st.textContent = '✗ No Gravatar';
+      }
+    } catch (e) {
+      row.st.className = 'status err'; row.st.textContent = 'Error checking';
+    }
+  }));
+  update();
+});
+update();
+</script>
+</body>
+</html>
